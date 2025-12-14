@@ -1,14 +1,14 @@
 import csv
 import logging
 import time
-import browser_control
 import block_detector
+import proxy_set
 
 from DrissionPage import ChromiumOptions
-from playwright.sync_api import Page, expect
 from DrissionPage import Chromium
 from DrissionPage import SessionPage
 from lxml.etree import ParserError
+from playwright.sync_api import Page, expect
 
 # ref: https://playwright.dev/python/docs/writing-tests
 # ref: https://www.drissionpage.cn/get_start/import
@@ -53,10 +53,11 @@ def test_first_layer_crawl(page: Page):
         "article_contents": []
     }
 
-    # --------------------- browser control ---------------------
-    browser_manager = browser_control.init_browsers()
+    # --------------------- drissionpage browser control ---------------------
+    agent = Chromium().latest_tab
 
-    agent, browser_idx = browser_manager.get_next_browser()
+    # --------------------- proxy control ---------------------
+    proxy_set.init_node_pool()
 
     # no browser popup
     # sp = SessionPage()
@@ -65,13 +66,9 @@ def test_first_layer_crawl(page: Page):
     # use DrissionPage's SessionPage (cannot perform JS)
     # first info layer access & extract (author, time, title, link)
     for i in range(1, page_number):
-        if block_detector.is_blocked(agent):
-            logging.warning("Page Blocked, switching browser.")
-            browser_manager.mark_current_failed()
-            agent, browser_idx = browser_manager.get_next_browser()
-            logging.info(f"Shift Browser Agent to {browser_idx}")
-            continue
-        # if access has been blocked
+        # >------if blocked
+        proxy_set.auto_handle_proxy(agent)
+        # <------if blocked
         agent.get(f"https://mitadmissions.org/blogs/page/{i}/")
         # titles: a [] for article's title
         article_titles = agent.eles('.post-tease__title')
@@ -113,32 +110,11 @@ def test_first_layer_crawl(page: Page):
     for i in range(0, len(records["links"])):
         # each detailed link will be accessed at this stage
         # ---------------------------- article__contents by links----------------------------
-        agent.get(records["links"][i], retry=10, interval=10, timeout=3)
-
-        # if access has been blocked
-        article_content = []
-        retry = 0
-        while retry != -1:
-            try:
-                # print(f'link: \n{records["links"][i]}')
-                article_content = agent.ele(".article__body js-hang-punc").text
-                break
-            except ParserError as pe:
-                logging.warning(
-                    f"{pe} appened when handling author, a_time, title, link, take a 40s break, retrying time: {retry}")
-                # Mark current browser agent is failed
-                try:
-                    agent.browser.quit()
-                except Exception:
-                    pass
-                browser_manager.mark_current_failed()
-                agent, browser_idx = browser_manager.get_next_browser()
-                logging.info(f"Shift Browser Agent to {browser_idx}")
-
-                time.sleep(20)
-                retry += 1
-
-        # print(f'{article_content}')
+        agent.get(records["links"][i])
+        # >------if blocked
+        proxy_set.auto_handle_proxy(agent)
+        # <------if blocked
+        article_content = agent.ele(".article__body js-hang-punc").text
         records["article_contents"].append(article_content)
 
         # ---------------------------- image_urls by links----------------------------
@@ -154,7 +130,7 @@ def test_first_layer_crawl(page: Page):
         records["img_urls"].append(img_url)
         # print(records["img_urls"])
         logging.info(f"-------- article__contents, image_urls page: {int(i / 16) + 1} --------")
-        time.sleep(1)
+        time.sleep(2)
 
     # print(f"{records}\n")
     logging.info("========= DATA EXCEPT comment_count HAS BEEN READ =========")
@@ -162,16 +138,12 @@ def test_first_layer_crawl(page: Page):
     # =========================== An independent Loop comment_count ===========================
     # here comment_count cannot be crawled cuz the JS Dynamic Insertion
     # need to use Playwright to catch
-    for i in range(1, page_number):
-        retry = 0
-        while retry != -1:
-            try:
-                page.goto(f"https://mitadmissions.org/blogs/page/{i}/")
-                break
-            except Exception as e:
-                logging.critical(f"{e} happened when comment_count, retrying time: {retry}")
-                retry += 1
 
+    for i in range(1, page_number):
+        # >------if blocked
+        proxy_set.auto_handle_proxy(page)
+        # <------if blocked
+        page.goto(f"https://mitadmissions.org/blogs/page/{i}/")
         # ref: https://playwright.dev/python/docs/api/class-elementhandle#element-handle-query-selector-all
         comment_rows = page.query_selector_all(".tease__comment-text a")
         # reading pseudo-elements
